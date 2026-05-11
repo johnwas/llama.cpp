@@ -1650,6 +1650,111 @@ static void test_convert_responses_to_chatcmpl() {
         assert_equals(std::string("You are a helpful assistant."), sys_msg.at("content").get<std::string>());
     }
 
+    // Merge instructions with leading developer messages.
+    {
+        json input = json::parse(R"({
+            "input": [
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "Follow the repo rules."
+                        }
+                    ]
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": "Hello"
+                }
+            ],
+            "instructions": "You are a coding agent.",
+            "model": "test-model"
+        })");
+
+        json result = server_chat_convert_responses_to_chatcmpl(input);
+
+        assert_equals((size_t)2, result.at("messages").size());
+        const auto & sys_msg = result.at("messages")[0];
+        assert_equals(std::string("system"), sys_msg.at("role").get<std::string>());
+        assert_equals(true, sys_msg.at("content").is_array());
+        assert_equals((size_t)2, sys_msg.at("content").size());
+        assert_equals(std::string("You are a coding agent."), sys_msg.at("content")[0].at("text").get<std::string>());
+        assert_equals(std::string("Follow the repo rules."), sys_msg.at("content")[1].at("text").get<std::string>());
+    }
+
+    // Keep standalone leading developer role.
+    {
+        json input = json::parse(R"({
+            "input": [
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": "Follow the repo rules."
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": "Hello"
+                }
+            ],
+            "model": "test-model"
+        })");
+
+        json result = server_chat_convert_responses_to_chatcmpl(input);
+
+        assert_equals((size_t)2, result.at("messages").size());
+        const auto & dev_msg = result.at("messages")[0];
+        assert_equals(std::string("developer"), dev_msg.at("role").get<std::string>());
+        assert_equals(true, dev_msg.at("content").is_array());
+        assert_equals(std::string("Follow the repo rules."), dev_msg.at("content")[0].at("text").get<std::string>());
+    }
+
+    // Merge only leading system/developer messages.
+    {
+        json input = json::parse(R"({
+            "input": [
+                {
+                    "type": "message",
+                    "role": "system",
+                    "content": "System input."
+                },
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": "Developer input."
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": "Hello"
+                },
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": "Late developer input."
+                }
+            ],
+            "instructions": "Instructions.",
+            "model": "test-model"
+        })");
+
+        json result = server_chat_convert_responses_to_chatcmpl(input);
+
+        assert_equals((size_t)3, result.at("messages").size());
+        const auto & sys_msg = result.at("messages")[0];
+        assert_equals(std::string("system"), sys_msg.at("role").get<std::string>());
+        assert_equals(true, sys_msg.at("content").is_array());
+        assert_equals((size_t)3, sys_msg.at("content").size());
+        assert_equals(std::string("Instructions."), sys_msg.at("content")[0].at("text").get<std::string>());
+        assert_equals(std::string("System input."), sys_msg.at("content")[1].at("text").get<std::string>());
+        assert_equals(std::string("Developer input."), sys_msg.at("content")[2].at("text").get<std::string>());
+        assert_equals(std::string("user"), result.at("messages")[1].at("role").get<std::string>());
+        assert_equals(std::string("developer"), result.at("messages")[2].at("role").get<std::string>());
+    }
+
     // Test with max_output_tokens conversion
     {
         json input = json::parse(R"({

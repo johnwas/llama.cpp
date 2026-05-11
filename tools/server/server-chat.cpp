@@ -39,7 +39,30 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
         static auto exists_and_is_string = [](const json & j, const char * key) -> bool {
             return j.contains(key) && j.at(key).is_string();
         };
+        static auto is_instruction_role = [](const json & j) -> bool {
+            const std::string role = j.value("role", std::string());
+            return role == "system" || role == "developer";
+        };
+        static auto append_content_parts = [](json & content, const std::vector<json> & parts) -> bool {
+            if (content.is_string()) {
+                json merged = json::array({
+                    json {
+                        {"text", content.get<std::string>()},
+                        {"type", "text"},
+                    },
+                });
+                content = merged;
+            } else if (!content.is_array()) {
+                return false;
+            }
+            for (const auto & part : parts) {
+                content.push_back(part);
+            }
+            return true;
+        };
 
+        // Merge only the leading system/developer block.
+        bool seen_non_instruction_message = false;
         for (json item : input_value) {
             bool merge_prev = !chatcmpl_messages.empty() && chatcmpl_messages.back().value("role", "") == "assistant";
 
@@ -104,13 +127,27 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                 }
                 item["content"] = chatcmpl_content;
 
-                chatcmpl_messages.push_back(item);
+                const bool instruction_role = is_instruction_role(item);
+                if (instruction_role
+                        && !seen_non_instruction_message
+                        && !chatcmpl_messages.empty()
+                        && is_instruction_role(chatcmpl_messages.front())) {
+                    if (!append_content_parts(chatcmpl_messages.front()["content"], chatcmpl_content)) {
+                        chatcmpl_messages.push_back(item);
+                    }
+                } else {
+                    chatcmpl_messages.push_back(item);
+                    if (!instruction_role) {
+                        seen_non_instruction_message = true;
+                    }
+                }
             } else if (exists_and_is_string(item, "role") &&
                 item.at("role") == "assistant" &&
                 exists_and_is_string(item, "type") &&
                 item.at("type") == "message"
             ) {
                 // #responses_create-input-input_item_list-item-output_message
+                seen_non_instruction_message = true;
                 auto chatcmpl_content = json::array();
 
                 // Handle both string content and array content
@@ -167,6 +204,7 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                 item.at("type") == "function_call"
             ) {
                 // #responses_create-input-input_item_list-item-function_tool_call
+                seen_non_instruction_message = true;
                 json tool_call = {
                     {"function", json {
                         {"arguments", item.at("arguments")},
@@ -194,6 +232,7 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                 item.at("type") == "function_call_output"
             ) {
                 // #responses_create-input-input_item_list-item-function_tool_call_output
+                seen_non_instruction_message = true;
                 if (item.at("output").is_string()) {
                     chatcmpl_messages.push_back(json {
                         {"content",      item.at("output")},
@@ -218,6 +257,7 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                 exists_and_is_string(item, "type") &&
                 item.at("type") == "reasoning") {
                 // #responses_create-input-input_item_list-item-reasoning
+                seen_non_instruction_message = true;
 
                 if (!exists_and_is_array(item, "content")) {
                     throw std::invalid_argument("item['content'] is not an array");
